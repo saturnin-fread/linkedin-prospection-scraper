@@ -16,17 +16,26 @@ HEADERS = {
 def get_session():
     if not os.path.exists(COOKIE_PATH):
         raise Exception("Cookies non chargés. Appelle /cookies d'abord.")
-    
-    with open(COOKIE_PATH) as f:
-        raw = json.load(f)
 
-    # Supporte 2 formats : liste directe OU {"cookies": [...]}
-    if isinstance(raw, dict):
-        cookies_list = raw.get("cookies", [])
-    elif isinstance(raw, list):
-        cookies_list = raw
+    with open(COOKIE_PATH) as f:
+        raw = f.read()
+
+    # Désérialise si c'est une string
+    data = json.loads(raw)
+    if isinstance(data, str):
+        data = json.loads(data)
+
+    # Supporte {"cookies": [...]} ou directement [...]
+    if isinstance(data, dict):
+        cookies_list = data.get("cookies", [])
+    elif isinstance(data, list):
+        cookies_list = data
     else:
-        raise Exception(f"Format cookies invalide : {type(raw)}")
+        raise Exception(f"Format cookies invalide : {type(data)}")
+
+    # Si cookies_list est encore une string (double encodage)
+    if isinstance(cookies_list, str):
+        cookies_list = json.loads(cookies_list)
 
     if not cookies_list:
         raise Exception("Liste de cookies vide.")
@@ -42,6 +51,23 @@ def get_session():
         "csrf-token": jsessionid.strip('"'),
     })
     return session
+
+@app.route("/cookies", methods=["POST"])
+def upload_cookies():
+    data = request.json or {}
+    cookies = data.get("cookies", [])
+
+    # Si cookies est une string JSON, on la parse
+    if isinstance(cookies, str):
+        try:
+            cookies = json.loads(cookies)
+        except Exception:
+            pass
+
+    with open(COOKIE_PATH, "w") as f:
+        json.dump(cookies, f)
+
+    return jsonify({"status": "cookies saved", "count": len(cookies) if isinstance(cookies, list) else 0})
 
 @app.route("/search", methods=["POST"])
 def search():
@@ -102,11 +128,11 @@ def debug():
         session = get_session()
         url = "https://www.linkedin.com/voyager/api/search/blended"
         params = {
-            "count":   2,
-            "filters": "List(resultType->PEOPLE)",
+            "count":    2,
+            "filters":  "List(resultType->PEOPLE)",
             "keywords": keyword,
-            "origin":  "GLOBAL_SEARCH_HEADER",
-            "q":       "all",
+            "origin":   "GLOBAL_SEARCH_HEADER",
+            "q":        "all",
         }
         resp = session.get(url, params=params, timeout=15)
         try:
@@ -116,14 +142,6 @@ def debug():
         return jsonify({"status_code": resp.status_code, "raw": body})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@app.route("/cookies", methods=["POST"])
-def upload_cookies():
-    data    = request.json or {}
-    cookies = data.get("cookies", [])
-    with open(COOKIE_PATH, "w") as f:
-        json.dump(cookies, f)
-    return jsonify({"status": "cookies saved", "count": len(cookies)})
 
 @app.route("/health")
 def health():
