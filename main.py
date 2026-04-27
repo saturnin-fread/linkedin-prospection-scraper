@@ -68,14 +68,13 @@ def search():
         session = get_session()
         query   = f"{keyword} {job_title}".strip()
         url     = "https://www.linkedin.com/voyager/api/voyagerSearchDashClusters"
-        params  = {
-            "decorationId": "com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175",
-            "count":        limit,
-            "filters":      "List(resultType->PEOPLE)",
-            "keywords":     query,
-            "origin":       "GLOBAL_SEARCH_HEADER",
-            "q":            "all",
-        }
+       url    = "https://www.linkedin.com/voyager/api/voyagerSearchDashClusters"
+params = {
+    "decorationId": "com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175",
+    "count":        limit,
+    "q":            "all",
+    "query":        f"(keywords:{query},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)),includeFiltersInResponse:false)",
+}
         resp = session.get(url, params=params, timeout=15)
         if resp.status_code != 200:
             return jsonify({"error": f"LinkedIn {resp.status_code}", "body": resp.text[:500]}), 500
@@ -117,15 +116,13 @@ def debug():
     keyword = data.get("keyword", "renovation")
     try:
         session = get_session()
-        url     = "https://www.linkedin.com/voyager/api/voyagerSearchDashClusters"
-        params  = {
-            "decorationId": "com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175",
-            "count":        2,
-            "filters":      "List(resultType->PEOPLE)",
-            "keywords":     keyword,
-            "origin":       "GLOBAL_SEARCH_HEADER",
-            "q":            "all",
-        }
+        url    = "https://www.linkedin.com/voyager/api/voyagerSearchDashClusters"
+params = {
+    "decorationId": "com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175",
+    "count":        limit,
+    "q":            "all",
+    "query":        f"(keywords:{query},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)),includeFiltersInResponse:false)",
+}
         resp = session.get(url, params=params, timeout=15)
         try:
             body = resp.json()
