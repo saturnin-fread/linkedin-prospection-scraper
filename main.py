@@ -47,6 +47,40 @@ def get_session():
     })
     return session
 
+def build_params(query, limit):
+    return {
+        "decorationId": "com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175",
+        "count":        limit,
+        "q":            "all",
+        "query":        f"(keywords:{query},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)),includeFiltersInResponse:false)",
+    }
+
+def extract_prospects(data_json):
+    prospects = []
+    elements  = data_json.get("elements", [])
+    for cluster in elements:
+        items = cluster.get("items", [])
+        for item in items:
+            entity = item.get("item", {}).get("entityResult", {})
+            if not entity:
+                continue
+            name   = entity.get("title", {}).get("text", "")
+            sub    = entity.get("primarySubtitle", {}).get("text", "")
+            loc    = entity.get("secondarySubtitle", {}).get("text", "")
+            nav    = entity.get("navigationUrl", "")
+            pub_id = nav.split("/in/")[-1].split("?")[0] if "/in/" in nav else ""
+            parts  = name.split(" ", 1)
+            prospects.append({
+                "firstname":   parts[0] if parts else "",
+                "lastname":    parts[1] if len(parts) > 1 else "",
+                "occupation":  sub,
+                "location":    loc,
+                "profile_url": f"https://linkedin.com/in/{pub_id}" if pub_id else "",
+                "summary":     "",
+                "source":      "linkedin"
+            })
+    return prospects
+
 @app.route("/env")
 def env():
     li_at      = os.environ.get("LI_AT", "NON_DEFINI")
@@ -65,48 +99,18 @@ def search():
     job_title = data.get("job_title", "")
     limit     = int(data.get("limit", 20))
     try:
-        session = get_session()
-        query   = f"{keyword} {job_title}".strip()
-        url     = "https://www.linkedin.com/voyager/api/voyagerSearchDashClusters"
-       url    = "https://www.linkedin.com/voyager/api/voyagerSearchDashClusters"
-params = {
-    "decorationId": "com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175",
-    "count":        limit,
-    "q":            "all",
-    "query":        f"(keywords:{query},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)),includeFiltersInResponse:false)",
-}
-        resp = session.get(url, params=params, timeout=15)
+        session  = get_session()
+        query    = f"{keyword} {job_title}".strip()
+        url      = "https://www.linkedin.com/voyager/api/voyagerSearchDashClusters"
+        params   = build_params(query, limit)
+        resp     = session.get(url, params=params, timeout=15)
+
         if resp.status_code != 200:
             return jsonify({"error": f"LinkedIn {resp.status_code}", "body": resp.text[:500]}), 500
 
-        data_json = resp.json()
-        prospects = []
-
-        # Extraction depuis la nouvelle structure
-        elements = data_json.get("elements", [])
-        for cluster in elements:
-            items = cluster.get("items", [])
-            for item in items:
-                entity = item.get("item", {}).get("entityResult", {})
-                if not entity:
-                    continue
-                name   = entity.get("title", {}).get("text", "")
-                sub    = entity.get("primarySubtitle", {}).get("text", "")
-                loc    = entity.get("secondarySubtitle", {}).get("text", "")
-                nav    = entity.get("navigationUrl", "")
-                pub_id = nav.split("/in/")[-1].split("?")[0] if "/in/" in nav else ""
-                parts  = name.split(" ", 1)
-                prospects.append({
-                    "firstname":   parts[0] if parts else "",
-                    "lastname":    parts[1] if len(parts) > 1 else "",
-                    "occupation":  sub,
-                    "location":    loc,
-                    "profile_url": f"https://linkedin.com/in/{pub_id}" if pub_id else "",
-                    "summary":     "",
-                    "source":      "linkedin"
-                })
-
+        prospects = extract_prospects(resp.json())
         return jsonify({"prospects": prospects, "count": len(prospects)})
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -116,14 +120,9 @@ def debug():
     keyword = data.get("keyword", "renovation")
     try:
         session = get_session()
-        url    = "https://www.linkedin.com/voyager/api/voyagerSearchDashClusters"
-params = {
-    "decorationId": "com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175",
-    "count":        limit,
-    "q":            "all",
-    "query":        f"(keywords:{query},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)),includeFiltersInResponse:false)",
-}
-        resp = session.get(url, params=params, timeout=15)
+        url     = "https://www.linkedin.com/voyager/api/voyagerSearchDashClusters"
+        params  = build_params(keyword, 2)
+        resp    = session.get(url, params=params, timeout=15)
         try:
             body = resp.json()
         except Exception:
