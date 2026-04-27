@@ -11,6 +11,7 @@ HEADERS = {
     "x-li-lang": "fr_FR",
     "x-li-track": '{"clientVersion":"1.13.1665"}',
     "x-restli-protocol-version": "2.0.0",
+    "x-li-page-instance": "urn:li:page:d_flagship3_search_srp_people;1",
 }
 
 def get_session():
@@ -48,40 +49,29 @@ def get_session():
     return session
 
 def safe_query(text):
-    """Nettoie le texte pour l'insérer dans le paramètre query LinkedIn"""
     return re.sub(r'[(),:]+', ' ', text).strip()
 
 def build_params(query, limit):
     q = safe_query(query)
     return {
-        "decorationId": "com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175",
-        "count":        min(int(limit), 49),
-        "q":            "all",
-        "keywords":     q,
-        "origin":       "GLOBAL_SEARCH_HEADER",
-        "filters":      "List(resultType->PEOPLE)",
+        "count":    min(int(limit), 49),
+        "filters":  "List(resultType->PEOPLE)",
+        "keywords": q,
+        "origin":   "GLOBAL_SEARCH_HEADER",
+        "q":        "all",
+        "start":    0,
     }
 
 def extract_prospects(data_json):
-    """
-    Tente d'extraire les prospects depuis plusieurs structures possibles
-    de réponse LinkedIn (l'API change régulièrement).
-    """
     prospects = []
 
-    # Structure 1 : elements[].items[].item.entityResult
+    # Structure 1 : elements[].elements[]
     for cluster in data_json.get("elements", []):
-        for item in cluster.get("items", []):
-            entity = item.get("item", {}).get("entityResult", {})
-            if not entity:
-                # Structure 2 : items directs sans entityResult
-                entity = item.get("entityResult", {})
-            if not entity:
-                continue
-            name   = entity.get("title", {}).get("text", "")
-            sub    = entity.get("primarySubtitle", {}).get("text", "")
-            loc    = entity.get("secondarySubtitle", {}).get("text", "")
-            nav    = entity.get("navigationUrl", "")
+        for item in cluster.get("elements", []):
+            name   = item.get("title", {}).get("text", "") if isinstance(item.get("title"), dict) else item.get("title", "")
+            sub    = item.get("primarySubtitle", {}).get("text", "") if isinstance(item.get("primarySubtitle"), dict) else item.get("primarySubtitle", "")
+            loc    = item.get("secondarySubtitle", {}).get("text", "") if isinstance(item.get("secondarySubtitle"), dict) else ""
+            nav    = item.get("navigationUrl", "")
             pub_id = nav.split("/in/")[-1].split("?")[0] if "/in/" in nav else ""
             if not name:
                 continue
@@ -96,20 +86,18 @@ def extract_prospects(data_json):
                 "source":      "linkedin"
             })
 
-    # Structure 3 : included[] (format normalisé LinkedIn)
+    # Structure 2 : included[]
     if not prospects:
         for item in data_json.get("included", []):
-            if item.get("$type", "") not in (
-                "com.linkedin.voyager.dash.search.SearchProfile",
-                "com.linkedin.voyager.search.SearchProfile",
-            ):
+            t = item.get("$type", "")
+            if "Profile" not in t and "Member" not in t:
                 continue
-            name   = item.get("title", {}).get("text", "") if isinstance(item.get("title"), dict) else item.get("title", "")
-            sub    = item.get("primarySubtitle", {}).get("text", "") if isinstance(item.get("primarySubtitle"), dict) else item.get("primarySubtitle", "")
-            loc    = item.get("secondarySubtitle", {}).get("text", "") if isinstance(item.get("secondarySubtitle"), dict) else item.get("secondarySubtitle", "")
-            nav    = item.get("navigationUrl", "")
-            pub_id = nav.split("/in/")[-1].split("?")[0] if "/in/" in nav else ""
-            if not name:
+            name   = item.get("firstName", "") + " " + item.get("lastName", "")
+            sub    = item.get("headline", "")
+            loc    = item.get("locationName", "")
+            pub_id = item.get("publicIdentifier", "")
+            name   = name.strip()
+            if not name or name == " ":
                 continue
             parts = name.split(" ", 1)
             prospects.append({
@@ -142,11 +130,11 @@ def search():
     job_title = data.get("job_title", "")
     limit     = data.get("limit", 20)
     try:
-        session   = get_session()
-        query     = f"{keyword} {job_title}".strip()
-        url       = "https://www.linkedin.com/voyager/api/voyagerSearchDashClusters"
-        params    = build_params(query, limit)
-        resp      = session.get(url, params=params, timeout=20)
+        session  = get_session()
+        query    = f"{keyword} {job_title}".strip()
+        url      = "https://www.linkedin.com/voyager/api/search/blended"
+        params   = build_params(query, limit)
+        resp     = session.get(url, params=params, timeout=20)
 
         if resp.status_code == 401:
             return jsonify({"error": "Session expirée. Mets à jour LI_AT dans Railway Variables."}), 401
@@ -169,7 +157,7 @@ def debug():
     keyword = data.get("keyword", "renovation")
     try:
         session = get_session()
-        url     = "https://www.linkedin.com/voyager/api/voyagerSearchDashClusters"
+        url     = "https://www.linkedin.com/voyager/api/search/blended"
         params  = build_params(keyword, 2)
         resp    = session.get(url, params=params, timeout=20)
         try:
@@ -177,9 +165,9 @@ def debug():
         except Exception:
             body = resp.text[:3000]
         return jsonify({
-            "status_code":    resp.status_code,
+            "status_code":     resp.status_code,
             "prospects_found": len(extract_prospects(body)) if isinstance(body, dict) else 0,
-            "raw":            body
+            "raw":             body
         })
     except requests.Timeout:
         return jsonify({"error": "Timeout"}), 504
