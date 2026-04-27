@@ -14,29 +14,31 @@ HEADERS = {
 }
 
 def get_session():
-    li_at      = os.environ.get("LI_AT", "")
-    jsessionid = os.environ.get("JSESSIONID", "")
+    # PRIORITÉ 1 : variables d'environnement Railway
+    li_at      = os.environ.get("LI_AT", "").strip()
+    jsessionid = os.environ.get("JSESSIONID", "").strip()
 
-    if not li_at:
-        # Fallback fichier si variables non définies
-        if not os.path.exists(COOKIE_PATH):
-            raise Exception("Cookies non chargés.")
+    # PRIORITÉ 2 : fichier cookies (fallback)
+    if not li_at and os.path.exists(COOKIE_PATH):
         with open(COOKIE_PATH) as f:
             raw = f.read().strip()
-        if not raw:
-            raise Exception("Fichier cookies vide.")
-        data = json.loads(raw)
-        if isinstance(data, str):
-            data = json.loads(data)
-        if isinstance(data, dict):
-            data = data.get("cookies", [])
-        if isinstance(data, str):
-            data = json.loads(data)
-        li_at      = next((c["value"] for c in data if c.get("name") == "li_at"), "")
-        jsessionid = next((c["value"] for c in data if c.get("name") == "JSESSIONID"), "")
+        if raw:
+            try:
+                data = json.loads(raw)
+                if isinstance(data, str):
+                    data = json.loads(data)
+                if isinstance(data, dict):
+                    data = data.get("cookies", [])
+                if isinstance(data, str):
+                    data = json.loads(data)
+                if isinstance(data, list):
+                    li_at      = next((c["value"] for c in data if isinstance(c, dict) and c.get("name") == "li_at"), "")
+                    jsessionid = next((c["value"] for c in data if isinstance(c, dict) and c.get("name") == "JSESSIONID"), "")
+            except Exception as e:
+                raise Exception(f"Erreur parsing cookies fichier : {e}")
 
     if not li_at:
-        raise Exception("li_at introuvable.")
+        raise Exception("li_at introuvable. Vérifie la variable LI_AT dans Railway.")
 
     session = requests.Session()
     session.cookies.set("li_at",      li_at,      domain=".linkedin.com")
@@ -47,36 +49,17 @@ def get_session():
     })
     return session
 
-@app.route("/cookies", methods=["POST"])
-def upload_cookies():
-    data = request.json or {}
-    cookies = data.get("cookies", [])
-
-    # Si cookies est une string JSON, on la parse
-    if isinstance(cookies, str):
-        try:
-            cookies = json.loads(cookies)
-        except Exception:
-            pass
-
-    with open(COOKIE_PATH, "w") as f:
-        json.dump(cookies, f)
-
-    return jsonify({"status": "cookies saved", "count": len(cookies) if isinstance(cookies, list) else 0})
-
 @app.route("/search", methods=["POST"])
 def search():
     data      = request.json or {}
     keyword   = data.get("keyword", "")
     job_title = data.get("job_title", "")
     limit     = int(data.get("limit", 20))
-
     try:
         session = get_session()
         query   = f"{keyword} {job_title}".strip()
-
-        url = "https://www.linkedin.com/voyager/api/search/blended"
-        params = {
+        url     = "https://www.linkedin.com/voyager/api/search/blended"
+        params  = {
             "count":    limit,
             "filters":  "List(resultType->PEOPLE)",
             "keywords": query,
@@ -84,14 +67,12 @@ def search():
             "q":        "all",
         }
         resp = session.get(url, params=params, timeout=15)
-
         if resp.status_code != 200:
             return jsonify({"error": f"LinkedIn {resp.status_code}", "body": resp.text[:500]}), 500
 
         data_json = resp.json()
         prospects = []
         elements  = data_json.get("data", {}).get("elements", [])
-
         for element in elements:
             for item in element.get("elements", []):
                 name   = item.get("title", {}).get("text", "")
@@ -109,9 +90,7 @@ def search():
                     "summary":     "",
                     "source":      "linkedin"
                 })
-
         return jsonify({"prospects": prospects, "count": len(prospects)})
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -121,8 +100,8 @@ def debug():
     keyword = data.get("keyword", "renovation")
     try:
         session = get_session()
-        url = "https://www.linkedin.com/voyager/api/search/blended"
-        params = {
+        url     = "https://www.linkedin.com/voyager/api/search/blended"
+        params  = {
             "count":    2,
             "filters":  "List(resultType->PEOPLE)",
             "keywords": keyword,
@@ -137,6 +116,19 @@ def debug():
         return jsonify({"status_code": resp.status_code, "raw": body})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/cookies", methods=["POST"])
+def upload_cookies():
+    data    = request.json or {}
+    cookies = data.get("cookies", [])
+    if isinstance(cookies, str):
+        try:
+            cookies = json.loads(cookies)
+        except Exception:
+            pass
+    with open(COOKIE_PATH, "w") as f:
+        json.dump(cookies, f)
+    return jsonify({"status": "cookies saved", "count": len(cookies) if isinstance(cookies, list) else 0})
 
 @app.route("/health")
 def health():
