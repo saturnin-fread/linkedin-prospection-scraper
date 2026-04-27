@@ -1,38 +1,34 @@
 from flask import Flask, request, jsonify
-from linkedin_api import Linkedin
-import os, json
+import requests, os, json
 
 app = Flask(__name__)
 COOKIE_PATH = "/app/cookies.json"
 
-def get_api():
-    if os.path.exists(COOKIE_PATH):
-        with open(COOKIE_PATH) as f:
-            cookies = json.load(f)
-        li_at = next((c["value"] for c in cookies if c["name"] == "li_at"), None)
-        JSESSIONID = next((c["value"] for c in cookies if c["name"] == "JSESSIONID"), None)
-        if li_at:
-            return Linkedin("", "", cookies={"li_at": li_at, "JSESSIONID": JSESSIONID})
-    return Linkedin(os.environ["LINKEDIN_EMAIL"], os.environ["LINKEDIN_PASSWORD"])
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/vnd.linkedin.normalized+json+2.1",
+    "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "x-li-lang": "fr_FR",
+    "x-li-track": '{"clientVersion":"1.13.1665"}',
+    "x-restli-protocol-version": "2.0.0",
+}
 
-@app.route("/debug", methods=["POST"])
-def debug():
-    """Retourne les données brutes de search_people pour diagnostic"""
-    data    = request.json or {}
-    keyword = data.get("keyword", "renovation")
-    limit   = int(data.get("limit", 2))
-    try:
-        api     = get_api()
-        results = api.search_people(keywords=keyword, limit=limit)
-        # Retourne les 2 premiers résultats bruts pour voir la structure exacte
-        sample  = results[:2] if results else []
-        return jsonify({
-            "total":   len(results),
-            "type":    str(type(results)),
-            "sample":  sample
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+def get_session():
+    """Crée une session requests avec les cookies LinkedIn"""
+    if not os.path.exists(COOKIE_PATH):
+        raise Exception("Cookies non chargés. Appelle /cookies d'abord.")
+    with open(COOKIE_PATH) as f:
+        cookies_list = json.load(f)
+    session = requests.Session()
+    for c in cookies_list:
+        session.cookies.set(c["name"], c["value"], domain=".linkedin.com")
+    # CSRF token requis par LinkedIn
+    jsessionid = session.cookies.get("JSESSIONID", "")
+    session.headers.update({
+        **HEADERS,
+        "csrf-token": jsessionid.strip('"'),
+    })
+    return session
 
 @app.route("/search", methods=["POST"])
 def search():
@@ -40,43 +36,74 @@ def search():
     keyword   = data.get("keyword", "")
     job_title = data.get("job_title", "")
     limit     = int(data.get("limit", 20))
+
     try:
-        api     = get_api()
-        results = api.search_people(
-            keywords=f"{keyword} {job_title}".strip(),
-            limit=limit
-        )
+        session = get_session()
+        query   = f"{keyword} {job_title}".strip()
+
+        # Appel direct à l'API interne LinkedIn (même endpoint que la lib)
+        url = "https://www.linkedin.com/voyager/api/search/blended"
+        params = {
+            "count":    limit,
+            "filters":  "List(resultType->PEOPLE)",
+            "keywords": query,
+            "origin":   "GLOBAL_SEARCH_HEADER",
+            "q":        "all",
+        }
+        resp = session.get(url, params=params, timeout=15)
+
+        if resp.status_code != 200:
+            return jsonify({"error": f"LinkedIn returned {resp.status_code}", "body": resp.text[:500]}), 500
+
+        data_json = resp.json()
+
+        # Extraction des profils depuis la réponse
         prospects = []
-        for r in results:
-            public_id = r.get("public_id") or r.get("publicIdentifier", "")
-            urn_id    = r.get("urn_id", "")
-            profile   = {}
-            if public_id:
-                try:
-                    profile = api.get_profile(public_id)
-                except Exception:
-                    pass
-            elif urn_id:
-                try:
-                    profile = api.get_profile(urn_id)
-                except Exception:
-                    pass
-            firstname  = profile.get("firstName")    or r.get("firstName", "")
-            lastname   = profile.get("lastName")     or r.get("lastName", "")
-            occupation = profile.get("headline")     or r.get("occupation", "")
-            location   = profile.get("locationName") or r.get("locationName", "")
-            summary    = profile.get("summary", "")
-            pid        = profile.get("public_id")    or public_id or urn_id
-            prospects.append({
-                "firstname":   firstname,
-                "lastname":    lastname,
-                "occupation":  occupation,
-                "location":    location,
-                "profile_url": f"https://linkedin.com/in/{pid}" if pid else "",
-                "summary":     summary,
-                "source":      "linkedin"
-            })
+        elements = data_json.get("data", {}).get("elements", [])
+        for element in elements:
+            for item in element.get("elements", []):
+                target = item.get("targetUrn", "")
+                entity = item.get("image", {})
+                name   = item.get("title", {}).get("text", "")
+                sub    = item.get("primarySubtitle", {}).get("text", "")
+                loc    = item.get("secondarySubtitle", {}).get("text", "")
+                pub_id = item.get("navigationUrl", "").split("/in/")[-1].split("?")[0] if "/in/" in item.get("navigationUrl","") else ""
+                parts  = name.split(" ", 1)
+                prospects.append({
+                    "firstname":   parts[0] if parts else "",
+                    "lastname":    parts[1] if len(parts) > 1 else "",
+                    "occupation":  sub,
+                    "location":    loc,
+                    "profile_url": f"https://linkedin.com/in/{pub_id}" if pub_id else "",
+                    "summary":     "",
+                    "source":      "linkedin"
+                })
+
         return jsonify({"prospects": prospects, "count": len(prospects)})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/debug", methods=["POST"])
+def debug():
+    """Retourne la réponse brute LinkedIn pour diagnostic"""
+    data    = request.json or {}
+    keyword = data.get("keyword", "renovation")
+    try:
+        session = get_session()
+        url = "https://www.linkedin.com/voyager/api/search/blended"
+        params = {
+            "count":    2,
+            "filters":  "List(resultType->PEOPLE)",
+            "keywords": keyword,
+            "origin":   "GLOBAL_SEARCH_HEADER",
+            "q":        "all",
+        }
+        resp = session.get(url, params=params, timeout=15)
+        return jsonify({
+            "status_code": resp.status_code,
+            "raw":         resp.json() if resp.headers.get("content-type","").startswith("application/json") else resp.text[:2000]
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
