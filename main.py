@@ -55,9 +55,11 @@ def build_params(query, limit):
     q = safe_query(query)
     return {
         "decorationId": "com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175",
-        "count":        min(int(limit), 49),  # LinkedIn limite à 49
+        "count":        min(int(limit), 49),
         "q":            "all",
-        "query":        f"(keywords:{q},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)),includeFiltersInResponse:false)",
+        "keywords":     q,
+        "origin":       "GLOBAL_SEARCH_HEADER",
+        "filters":      "List(resultType->PEOPLE)",
     }
 
 def extract_prospects(data_json):
