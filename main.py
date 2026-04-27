@@ -14,15 +14,28 @@ HEADERS = {
 }
 
 def get_session():
-    """Crée une session requests avec les cookies LinkedIn"""
     if not os.path.exists(COOKIE_PATH):
         raise Exception("Cookies non chargés. Appelle /cookies d'abord.")
+    
     with open(COOKIE_PATH) as f:
-        cookies_list = json.load(f)
+        raw = json.load(f)
+
+    # Supporte 2 formats : liste directe OU {"cookies": [...]}
+    if isinstance(raw, dict):
+        cookies_list = raw.get("cookies", [])
+    elif isinstance(raw, list):
+        cookies_list = raw
+    else:
+        raise Exception(f"Format cookies invalide : {type(raw)}")
+
+    if not cookies_list:
+        raise Exception("Liste de cookies vide.")
+
     session = requests.Session()
     for c in cookies_list:
-        session.cookies.set(c["name"], c["value"], domain=".linkedin.com")
-    # CSRF token requis par LinkedIn
+        if isinstance(c, dict) and "name" in c and "value" in c:
+            session.cookies.set(c["name"], c["value"], domain=".linkedin.com")
+
     jsessionid = session.cookies.get("JSESSIONID", "")
     session.headers.update({
         **HEADERS,
@@ -41,7 +54,6 @@ def search():
         session = get_session()
         query   = f"{keyword} {job_title}".strip()
 
-        # Appel direct à l'API interne LinkedIn (même endpoint que la lib)
         url = "https://www.linkedin.com/voyager/api/search/blended"
         params = {
             "count":    limit,
@@ -53,21 +65,19 @@ def search():
         resp = session.get(url, params=params, timeout=15)
 
         if resp.status_code != 200:
-            return jsonify({"error": f"LinkedIn returned {resp.status_code}", "body": resp.text[:500]}), 500
+            return jsonify({"error": f"LinkedIn {resp.status_code}", "body": resp.text[:500]}), 500
 
         data_json = resp.json()
-
-        # Extraction des profils depuis la réponse
         prospects = []
-        elements = data_json.get("data", {}).get("elements", [])
+        elements  = data_json.get("data", {}).get("elements", [])
+
         for element in elements:
             for item in element.get("elements", []):
-                target = item.get("targetUrn", "")
-                entity = item.get("image", {})
                 name   = item.get("title", {}).get("text", "")
                 sub    = item.get("primarySubtitle", {}).get("text", "")
                 loc    = item.get("secondarySubtitle", {}).get("text", "")
-                pub_id = item.get("navigationUrl", "").split("/in/")[-1].split("?")[0] if "/in/" in item.get("navigationUrl","") else ""
+                nav    = item.get("navigationUrl", "")
+                pub_id = nav.split("/in/")[-1].split("?")[0] if "/in/" in nav else ""
                 parts  = name.split(" ", 1)
                 prospects.append({
                     "firstname":   parts[0] if parts else "",
@@ -86,24 +96,24 @@ def search():
 
 @app.route("/debug", methods=["POST"])
 def debug():
-    """Retourne la réponse brute LinkedIn pour diagnostic"""
     data    = request.json or {}
     keyword = data.get("keyword", "renovation")
     try:
         session = get_session()
         url = "https://www.linkedin.com/voyager/api/search/blended"
         params = {
-            "count":    2,
-            "filters":  "List(resultType->PEOPLE)",
+            "count":   2,
+            "filters": "List(resultType->PEOPLE)",
             "keywords": keyword,
-            "origin":   "GLOBAL_SEARCH_HEADER",
-            "q":        "all",
+            "origin":  "GLOBAL_SEARCH_HEADER",
+            "q":       "all",
         }
         resp = session.get(url, params=params, timeout=15)
-        return jsonify({
-            "status_code": resp.status_code,
-            "raw":         resp.json() if resp.headers.get("content-type","").startswith("application/json") else resp.text[:2000]
-        })
+        try:
+            body = resp.json()
+        except Exception:
+            body = resp.text[:2000]
+        return jsonify({"status_code": resp.status_code, "raw": body})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
