@@ -14,11 +14,9 @@ HEADERS = {
 }
 
 def get_session():
-    # PRIORITÉ 1 : variables d'environnement Railway
     li_at      = os.environ.get("LI_AT", "").strip()
     jsessionid = os.environ.get("JSESSIONID", "").strip()
 
-    # PRIORITÉ 2 : fichier cookies (fallback)
     if not li_at and os.path.exists(COOKIE_PATH):
         with open(COOKIE_PATH) as f:
             raw = f.read().strip()
@@ -69,13 +67,14 @@ def search():
     try:
         session = get_session()
         query   = f"{keyword} {job_title}".strip()
-        url     = "https://www.linkedin.com/voyager/api/search/blended"
+        url     = "https://www.linkedin.com/voyager/api/voyagerSearchDashClusters"
         params  = {
-            "count":    limit,
-            "filters":  "List(resultType->PEOPLE)",
-            "keywords": query,
-            "origin":   "GLOBAL_SEARCH_HEADER",
-            "q":        "all",
+            "decorationId": "com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175",
+            "count":        limit,
+            "filters":      "List(resultType->PEOPLE)",
+            "keywords":     query,
+            "origin":       "GLOBAL_SEARCH_HEADER",
+            "q":            "all",
         }
         resp = session.get(url, params=params, timeout=15)
         if resp.status_code != 200:
@@ -83,13 +82,19 @@ def search():
 
         data_json = resp.json()
         prospects = []
-        elements  = data_json.get("data", {}).get("elements", [])
-        for element in elements:
-            for item in element.get("elements", []):
-                name   = item.get("title", {}).get("text", "")
-                sub    = item.get("primarySubtitle", {}).get("text", "")
-                loc    = item.get("secondarySubtitle", {}).get("text", "")
-                nav    = item.get("navigationUrl", "")
+
+        # Extraction depuis la nouvelle structure
+        elements = data_json.get("elements", [])
+        for cluster in elements:
+            items = cluster.get("items", [])
+            for item in items:
+                entity = item.get("item", {}).get("entityResult", {})
+                if not entity:
+                    continue
+                name   = entity.get("title", {}).get("text", "")
+                sub    = entity.get("primarySubtitle", {}).get("text", "")
+                loc    = entity.get("secondarySubtitle", {}).get("text", "")
+                nav    = entity.get("navigationUrl", "")
                 pub_id = nav.split("/in/")[-1].split("?")[0] if "/in/" in nav else ""
                 parts  = name.split(" ", 1)
                 prospects.append({
@@ -101,6 +106,7 @@ def search():
                     "summary":     "",
                     "source":      "linkedin"
                 })
+
         return jsonify({"prospects": prospects, "count": len(prospects)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -111,13 +117,14 @@ def debug():
     keyword = data.get("keyword", "renovation")
     try:
         session = get_session()
-        url     = "https://www.linkedin.com/voyager/api/search/blended"
+        url     = "https://www.linkedin.com/voyager/api/voyagerSearchDashClusters"
         params  = {
-            "count":    2,
-            "filters":  "List(resultType->PEOPLE)",
-            "keywords": keyword,
-            "origin":   "GLOBAL_SEARCH_HEADER",
-            "q":        "all",
+            "decorationId": "com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175",
+            "count":        2,
+            "filters":      "List(resultType->PEOPLE)",
+            "keywords":     keyword,
+            "origin":       "GLOBAL_SEARCH_HEADER",
+            "q":            "all",
         }
         resp = session.get(url, params=params, timeout=15)
         try:
