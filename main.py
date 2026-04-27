@@ -49,6 +49,17 @@ def get_session():
     })
     return session
 
+@app.route("/env")
+def env():
+    li_at      = os.environ.get("LI_AT", "NON_DEFINI")
+    jsessionid = os.environ.get("JSESSIONID", "NON_DEFINI")
+    return jsonify({
+        "LI_AT_length":      len(li_at),
+        "LI_AT_start":       li_at[:10] if li_at != "NON_DEFINI" else "NON_DEFINI",
+        "JSESSIONID_length": len(jsessionid),
+        "JSESSIONID_start":  jsessionid[:10] if jsessionid != "NON_DEFINI" else "NON_DEFINI",
+    })
+
 @app.route("/search", methods=["POST"])
 def search():
     data      = request.json or {}
