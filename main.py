@@ -14,38 +14,33 @@ HEADERS = {
 }
 
 def get_session():
-    if not os.path.exists(COOKIE_PATH):
-        raise Exception("Cookies non chargés. Appelle /cookies d'abord.")
+    li_at      = os.environ.get("LI_AT", "")
+    jsessionid = os.environ.get("JSESSIONID", "")
 
-    with open(COOKIE_PATH) as f:
-        raw = f.read()
+    if not li_at:
+        # Fallback fichier si variables non définies
+        if not os.path.exists(COOKIE_PATH):
+            raise Exception("Cookies non chargés.")
+        with open(COOKIE_PATH) as f:
+            raw = f.read().strip()
+        if not raw:
+            raise Exception("Fichier cookies vide.")
+        data = json.loads(raw)
+        if isinstance(data, str):
+            data = json.loads(data)
+        if isinstance(data, dict):
+            data = data.get("cookies", [])
+        if isinstance(data, str):
+            data = json.loads(data)
+        li_at      = next((c["value"] for c in data if c.get("name") == "li_at"), "")
+        jsessionid = next((c["value"] for c in data if c.get("name") == "JSESSIONID"), "")
 
-    # Désérialise si c'est une string
-    data = json.loads(raw)
-    if isinstance(data, str):
-        data = json.loads(data)
-
-    # Supporte {"cookies": [...]} ou directement [...]
-    if isinstance(data, dict):
-        cookies_list = data.get("cookies", [])
-    elif isinstance(data, list):
-        cookies_list = data
-    else:
-        raise Exception(f"Format cookies invalide : {type(data)}")
-
-    # Si cookies_list est encore une string (double encodage)
-    if isinstance(cookies_list, str):
-        cookies_list = json.loads(cookies_list)
-
-    if not cookies_list:
-        raise Exception("Liste de cookies vide.")
+    if not li_at:
+        raise Exception("li_at introuvable.")
 
     session = requests.Session()
-    for c in cookies_list:
-        if isinstance(c, dict) and "name" in c and "value" in c:
-            session.cookies.set(c["name"], c["value"], domain=".linkedin.com")
-
-    jsessionid = session.cookies.get("JSESSIONID", "")
+    session.cookies.set("li_at",      li_at,      domain=".linkedin.com")
+    session.cookies.set("JSESSIONID", jsessionid, domain=".linkedin.com")
     session.headers.update({
         **HEADERS,
         "csrf-token": jsessionid.strip('"'),
