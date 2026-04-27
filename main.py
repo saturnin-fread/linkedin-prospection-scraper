@@ -12,15 +12,27 @@ def get_api():
         li_at = next((c["value"] for c in cookies if c["name"] == "li_at"), None)
         JSESSIONID = next((c["value"] for c in cookies if c["name"] == "JSESSIONID"), None)
         if li_at:
-            return Linkedin(
-                "",
-                "",
-                cookies={"li_at": li_at, "JSESSIONID": JSESSIONID}
-            )
-    return Linkedin(
-        os.environ["LINKEDIN_EMAIL"],
-        os.environ["LINKEDIN_PASSWORD"]
-    )
+            return Linkedin("", "", cookies={"li_at": li_at, "JSESSIONID": JSESSIONID})
+    return Linkedin(os.environ["LINKEDIN_EMAIL"], os.environ["LINKEDIN_PASSWORD"])
+
+@app.route("/debug", methods=["POST"])
+def debug():
+    """Retourne les données brutes de search_people pour diagnostic"""
+    data    = request.json or {}
+    keyword = data.get("keyword", "renovation")
+    limit   = int(data.get("limit", 2))
+    try:
+        api     = get_api()
+        results = api.search_people(keywords=keyword, limit=limit)
+        # Retourne les 2 premiers résultats bruts pour voir la structure exacte
+        sample  = results[:2] if results else []
+        return jsonify({
+            "total":   len(results),
+            "type":    str(type(results)),
+            "sample":  sample
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/search", methods=["POST"])
 def search():
@@ -28,24 +40,17 @@ def search():
     keyword   = data.get("keyword", "")
     job_title = data.get("job_title", "")
     limit     = int(data.get("limit", 20))
-
     try:
-        api = get_api()
-
-        # search_people retourne une liste de mini-objets avec urn_id / public_id
+        api     = get_api()
         results = api.search_people(
             keywords=f"{keyword} {job_title}".strip(),
             limit=limit
         )
-
         prospects = []
         for r in results:
-            # Récupère l'identifiant public ou l'URN
             public_id = r.get("public_id") or r.get("publicIdentifier", "")
             urn_id    = r.get("urn_id", "")
-
-            # Tente de récupérer le profil complet
-            profile = {}
+            profile   = {}
             if public_id:
                 try:
                     profile = api.get_profile(public_id)
@@ -56,15 +61,12 @@ def search():
                     profile = api.get_profile(urn_id)
                 except Exception:
                     pass
-
-            # Fusion mini-objet + profil complet
-            firstname  = profile.get("firstName")  or r.get("firstName", "")
-            lastname   = profile.get("lastName")   or r.get("lastName", "")
-            occupation = profile.get("headline")   or r.get("occupation", "")
+            firstname  = profile.get("firstName")    or r.get("firstName", "")
+            lastname   = profile.get("lastName")     or r.get("lastName", "")
+            occupation = profile.get("headline")     or r.get("occupation", "")
             location   = profile.get("locationName") or r.get("locationName", "")
             summary    = profile.get("summary", "")
-            pid        = profile.get("public_id")  or public_id or urn_id
-
+            pid        = profile.get("public_id")    or public_id or urn_id
             prospects.append({
                 "firstname":   firstname,
                 "lastname":    lastname,
@@ -74,9 +76,7 @@ def search():
                 "summary":     summary,
                 "source":      "linkedin"
             })
-
         return jsonify({"prospects": prospects, "count": len(prospects)})
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
